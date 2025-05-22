@@ -17,6 +17,7 @@ import {
   Bell,
   Loader2,
   Tag,
+  GripVertical,
 } from "lucide-react"
 import { Sun, Moon } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
@@ -25,6 +26,8 @@ import { KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/c
 import { sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { format, isAfter, isBefore, isToday, addDays } from "date-fns"
+import { DndContext } from "@dnd-kit/core"
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 
 type TaskPriority = "Low" | "Medium" | "High"
 
@@ -494,17 +497,23 @@ export default function TodoApp() {
     }
   }
 
+  // Update handleDragEnd to reorder tasks only if all filters are default and no search
   const handleDragEnd = (event: any) => {
     const { active, over } = event
-
-    if (active.id !== over.id) {
+    if (!over || active.id === over.id) return
+    // Only allow reordering if all filters are default and no search
+    if (
+      statusFilter === "All" &&
+      categoryFilter === "All Categories" &&
+      priorityFilter === "All Priorities" &&
+      !searchQuery
+    ) {
       const oldIndex = tasks.findIndex((task) => task.id === active.id)
       const newIndex = tasks.findIndex((task) => task.id === over.id)
-
+      if (oldIndex === -1 || newIndex === -1) return
       const newTasks = [...tasks]
       const [movedTask] = newTasks.splice(oldIndex, 1)
       newTasks.splice(newIndex, 0, movedTask)
-
       setTasks(newTasks)
       toast.success("Task order updated")
     }
@@ -726,12 +735,16 @@ export default function TodoApp() {
 
   const stats = getTaskStats()
 
-  const SortableTask = ({ task }: { task: Task }) => {
-    const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: task.id })
-
+  const SortableTask = ({ task, showDragHandle = false }: { task: Task; showDragHandle?: boolean }) => {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id })
     const style = {
       transform: CSS.Transform.toString(transform),
       transition,
+      opacity: isDragging ? 0.6 : 1,
+      position: 'relative' as const,
+      zIndex: isDragging ? 999 : 'auto',
+      cursor: showDragHandle ? 'grab' : 'default',
+      touchAction: 'none',
     }
 
     const isSelected = selectedTaskIds.includes(task.id)
@@ -743,160 +756,281 @@ export default function TodoApp() {
         ref={setNodeRef}
         style={style}
         {...attributes}
-        {...listeners}
+        {...(showDragHandle ? listeners : {})}
         initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
+        animate={{ 
+          opacity: isDragging ? 0.6 : 1,
+          y: 0,
+          scale: isDragging ? 1.02 : 1,
+          rotate: isDragging ? 1 : 0,
+          boxShadow: isDragging 
+            ? '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)' 
+            : '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)'
+        }}
         exit={{ opacity: 0, x: -20 }}
-        transition={{ duration: 0.2 }}
+        transition={{ 
+          duration: 0.2,
+          scale: {
+            type: "spring",
+            stiffness: 300,
+            damping: 30
+          },
+          rotate: {
+            type: "spring",
+            stiffness: 300,
+            damping: 30
+          }
+        }}
+        whileHover={showDragHandle ? {
+          scale: 1.01,
+          boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+          transition: { duration: 0.2 }
+        } : {}}
         className={`p-4 rounded-md border shadow-sm ${
           darkMode ? "bg-[#0f172a] border-[#1e293b]" : "bg-white border-gray-200"
         } ${showBulkActions ? "hover:border-blue-500 transition-colors" : ""} ${
           isSelected ? "border-blue-500 ring-2 ring-blue-200" : ""
-        }`}
+        } flex items-center gap-2 ${isDragging ? 'cursor-grabbing' : ''} ${
+          showDragHandle ? 'hover:border-blue-400' : ''
+        } transition-all duration-200 ease-in-out`}
       >
-        <div className="flex flex-col gap-2">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2">
-              {showBulkActions && (
-                <div className="flex-shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => toggleTaskSelection(task.id)}
-                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                </div>
-              )}
-              <div
-                className={`w-3 h-3 rounded-full ${
-                  task.status === "Completed"
-                    ? "bg-green-500"
-                    : task.status === "In Progress"
-                      ? "bg-blue-500"
-                      : "bg-amber-500"
-                }`}
-              ></div>
-              <h3
-                className={`font-medium ${darkMode ? "text-white" : "text-gray-900"} cursor-pointer hover:underline`}
-                onClick={() => viewTaskDetails(task)}
-              >
-                {task.title}
-              </h3>
-              {task.subtasks && task.subtasks.length > 0 && (
-                <span
-                  className={`text-xs px-1.5 py-0.5 rounded-full ${
-                    darkMode ? "bg-[#1e293b] text-gray-300" : "bg-gray-100 text-gray-700"
+        {showDragHandle && (
+          <motion.span 
+            className="cursor-grab text-gray-400 hover:text-blue-500 active:cursor-grabbing"
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+          >
+            <GripVertical className="h-5 w-5" />
+          </motion.span>
+        )}
+        <div className="flex-1">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2">
+                {showBulkActions && (
+                  <div className="flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleTaskSelection(task.id)}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </div>
+                )}
+                <div
+                  className={`w-3 h-3 rounded-full ${
+                    task.status === "Completed"
+                      ? "bg-green-500"
+                      : task.status === "In Progress"
+                        ? "bg-blue-500"
+                        : "bg-amber-500"
                   }`}
+                ></div>
+                <h3
+                  className={`font-medium ${darkMode ? "text-white" : "text-gray-900"} cursor-pointer hover:underline`}
+                  onClick={() => viewTaskDetails(task)}
                 >
-                  {task.subtasks.filter((st) => st.completed).length}/{task.subtasks.length}
-                </span>
-              )}
+                  {task.title}
+                </h3>
+                {task.subtasks && task.subtasks.length > 0 && (
+                  <span
+                    className={`text-xs px-1.5 py-0.5 rounded-full ${
+                      darkMode ? "bg-[#1e293b] text-gray-300" : "bg-gray-100 text-gray-700"
+                    }`}
+                  >
+                    {task.subtasks.filter((st) => st.completed).length}/{task.subtasks.length}
+                  </span>
+                )}
+              </div>
+              <div className={`text-xs ${darkMode ? "text-gray-400" : "text-gray-500"}`}>{task.date}</div>
             </div>
-            <div className={`text-xs ${darkMode ? "text-gray-400" : "text-gray-500"}`}>{task.date}</div>
-          </div>
-          {task.description && (
-            <p className={`text-sm ${darkMode ? "text-gray-300" : "text-gray-600"}`}>{task.description}</p>
-          )}
-          <div className="flex flex-wrap gap-2 mt-2">
-            <span
-              className={`text-xs px-2 py-1 rounded-full ${
-                task.status === "Pending"
-                  ? darkMode
-                    ? "bg-amber-900 text-amber-100"
-                    : "bg-amber-100 text-amber-800"
-                  : task.status === "In Progress"
-                    ? darkMode
-                      ? "bg-blue-900 text-blue-100"
-                      : "bg-blue-100 text-blue-800"
-                    : darkMode
-                      ? "bg-green-900 text-green-100"
-                      : "bg-green-100 text-green-800"
-              }`}
-            >
-              {task.status}
-            </span>
-            <span
-              className="text-xs px-2 py-1 rounded-full text-white flex items-center gap-1"
-              style={{ backgroundColor: getCategoryColor(task.category) }}
-            >
-              {task.category}
-            </span>
-            <span
-              className={`text-xs px-2 py-1 rounded-full ${
-                task.priority === "High"
-                  ? darkMode
-                    ? "bg-red-900 text-red-100"
-                    : "bg-red-100 text-red-800"
-                  : task.priority === "Medium"
-                    ? darkMode
-                      ? "bg-yellow-900 text-yellow-100"
-                      : "bg-yellow-100 text-yellow-800"
-                    : darkMode
-                      ? "bg-blue-900 text-blue-100"
-                      : "bg-blue-100 text-blue-800"
-              } flex items-center gap-1`}
-            >
-              <AlertCircle className="h-3 w-3" />
-              {task.priority}
-            </span>
-            {task.dueDate && (
+            {task.description && (
+              <p className={`text-sm ${darkMode ? "text-gray-300" : "text-gray-600"}`}>{task.description}</p>
+            )}
+            <div className="flex flex-wrap gap-2 mt-2">
               <span
-                className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${
-                  isOverdue
+                className={`text-xs px-2 py-1 rounded-full ${
+                  task.status === "Pending"
+                    ? darkMode
+                      ? "bg-amber-900 text-amber-100"
+                      : "bg-amber-100 text-amber-800"
+                    : task.status === "In Progress"
+                      ? darkMode
+                        ? "bg-blue-900 text-blue-100"
+                        : "bg-blue-100 text-blue-800"
+                      : darkMode
+                        ? "bg-green-900 text-green-100"
+                        : "bg-green-100 text-green-800"
+                }`}
+              >
+                {task.status}
+              </span>
+              <span
+                className="text-xs px-2 py-1 rounded-full text-white flex items-center gap-1"
+                style={{ backgroundColor: getCategoryColor(task.category) }}
+              >
+                {task.category}
+              </span>
+              <span
+                className={`text-xs px-2 py-1 rounded-full ${
+                  task.priority === "High"
                     ? darkMode
                       ? "bg-red-900 text-red-100"
                       : "bg-red-100 text-red-800"
-                    : isDueToday
+                    : task.priority === "Medium"
                       ? darkMode
-                        ? "bg-purple-900 text-purple-100"
-                        : "bg-purple-100 text-purple-800"
+                        ? "bg-yellow-900 text-yellow-100"
+                        : "bg-yellow-100 text-yellow-800"
                       : darkMode
-                        ? "bg-gray-800 text-gray-300"
-                        : "bg-gray-100 text-gray-800"
-                }`}
+                        ? "bg-blue-900 text-blue-100"
+                        : "bg-blue-100 text-blue-800"
+                } flex items-center gap-1`}
               >
-                <Calendar className="h-3 w-3" />
-                {task.dueDate}
-                {isOverdue && " (Overdue)"}
-                {isDueToday && " (Today)"}
+                <AlertCircle className="h-3 w-3" />
+                {task.priority}
               </span>
-            )}
-            {task.reminder && (
-              <span
-                className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${
-                  darkMode ? "bg-indigo-900 text-indigo-100" : "bg-indigo-100 text-indigo-800"
-                }`}
-              >
-                <Bell className="h-3 w-3" />
-                {format(new Date(task.reminder), "MMM d, h:mm a")}
-              </span>
-            )}
-          </div>
-          {task.tags && task.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1">
-              {task.tags.map((tag) => (
+              {task.dueDate && (
                 <span
-                  key={tag}
-                  className={`text-xs px-2 py-0.5 rounded-full ${
-                    darkMode ? "bg-[#1e293b] text-gray-300" : "bg-gray-100 text-gray-700"
+                  className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${
+                    isOverdue
+                      ? darkMode
+                        ? "bg-red-900 text-red-100"
+                        : "bg-red-100 text-red-800"
+                      : isDueToday
+                        ? darkMode
+                          ? "bg-purple-900 text-purple-100"
+                          : "bg-purple-100 text-purple-800"
+                        : darkMode
+                          ? "bg-gray-800 text-gray-300"
+                          : "bg-gray-100 text-gray-800"
                   }`}
                 >
-                  #{tag}
+                  <Calendar className="h-3 w-3" />
+                  {task.dueDate}
+                  {isOverdue && " (Overdue)"}
+                  {isDueToday && " (Today)"}
                 </span>
-              ))}
+              )}
+              {task.reminder && (
+                <span
+                  className={`text-xs px-2 py-1 rounded-full flex items-center gap-1 ${
+                    darkMode ? "bg-indigo-900 text-indigo-100" : "bg-indigo-100 text-indigo-800"
+                  }`}
+                >
+                  <Bell className="h-3 w-3" />
+                  {format(new Date(task.reminder), "MMM d, h:mm a")}
+                </span>
+              )}
             </div>
-          )}
-          <div className="flex flex-wrap justify-end gap-2 mt-2">
-            {task.status === "Pending" && (
+            {task.tags && task.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {task.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className={`text-xs px-2 py-0.5 rounded-full ${
+                      darkMode ? "bg-[#1e293b] text-gray-300" : "bg-gray-100 text-gray-700"
+                    }`}
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap justify-end gap-2 mt-2">
+              {task.status === "Pending" && (
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className={`flex items-center gap-1 px-3 py-1 rounded-md ${
+                    darkMode
+                      ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
+                      : "bg-white border-gray-300 hover:bg-gray-100 text-black"
+                  } border`}
+                  onClick={() => updateTaskStatus(task.id, "In Progress")}
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <span>Start</span>
+                </motion.button>
+              )}
+              {task.status === "In Progress" && (
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className={`flex items-center gap-1 px-3 py-1 rounded-md ${
+                    darkMode
+                      ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
+                      : "bg-white border-gray-300 hover:bg-gray-100 text-black"
+                  } border`}
+                  onClick={() => updateTaskStatus(task.id, "Completed")}
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>Complete</span>
+                </motion.button>
+              )}
+              {task.status === "Completed" && (
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className={`flex items-center gap-1 px-3 py-1 rounded-md ${
+                    darkMode
+                      ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
+                      : "bg-white border-gray-300 hover:bg-gray-100 text-black"
+                  } border`}
+                  onClick={() => updateTaskStatus(task.id, "Pending")}
+                >
+                  <svg
+                    className="h-4 w-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <span>Reopen</span>
+                </motion.button>
+              )}
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                className={`flex items-center gap-1 px-3 py-1 rounded-md ${
+                className={`px-3 py-1 rounded-md ${
                   darkMode
                     ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
                     : "bg-white border-gray-300 hover:bg-gray-100 text-black"
                 } border`}
-                onClick={() => updateTaskStatus(task.id, "In Progress")}
+                onClick={() => editTask(task.id)}
               >
                 <svg
                   className="h-4 w-4"
@@ -909,51 +1043,19 @@ export default function TodoApp() {
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth={2}
-                    d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
                   />
                 </svg>
-                <span>Start</span>
               </motion.button>
-            )}
-            {task.status === "In Progress" && (
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                className={`flex items-center gap-1 px-3 py-1 rounded-md ${
+                className={`px-3 py-1 rounded-md ${
                   darkMode
-                    ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
-                    : "bg-white border-gray-300 hover:bg-gray-100 text-black"
+                    ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-red-400"
+                    : "bg-white border-gray-300 hover:bg-gray-100 text-red-500"
                 } border`}
-                onClick={() => updateTaskStatus(task.id, "Completed")}
-              >
-                <svg
-                  className="h-4 w-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <span>Complete</span>
-              </motion.button>
-            )}
-            {task.status === "Completed" && (
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className={`flex items-center gap-1 px-3 py-1 rounded-md ${
-                  darkMode
-                    ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
-                    : "bg-white border-gray-300 hover:bg-gray-100 text-black"
-                } border`}
-                onClick={() => updateTaskStatus(task.id, "Pending")}
+                onClick={() => deleteTask(task.id)}
               >
                 <svg
                   className="h-4 w-4"
@@ -966,62 +1068,11 @@ export default function TodoApp() {
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth={2}
-                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
                   />
                 </svg>
-                <span>Reopen</span>
               </motion.button>
-            )}
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className={`px-3 py-1 rounded-md ${
-                darkMode
-                  ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-white"
-                  : "bg-white border-gray-300 hover:bg-gray-100 text-black"
-              } border`}
-              onClick={() => editTask(task.id)}
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                />
-              </svg>
-            </motion.button>
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              className={`px-3 py-1 rounded-md ${
-                darkMode
-                  ? "bg-[#0c1425] border-[#1e293b] hover:bg-[#1e293b] text-red-400"
-                  : "bg-white border-gray-300 hover:bg-gray-100 text-red-500"
-              } border`}
-              onClick={() => deleteTask(task.id)}
-            >
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                />
-              </svg>
-            </motion.button>
+            </div>
           </div>
         </div>
       </motion.li>
@@ -2028,11 +2079,27 @@ export default function TodoApp() {
                 No tasks found. Add a new task to get started!
               </div>
             ) : (
-              <ul className="space-y-2">
-                {filteredAndSortedTasks.map((task) => (
-                  <SortableTask key={task.id} task={task} />
-                ))}
-              </ul>
+              // Enable drag-and-drop only if all filters are default and no search
+              statusFilter === "All" &&
+              categoryFilter === "All Categories" &&
+              priorityFilter === "All Priorities" &&
+              !searchQuery ? (
+                <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+                  <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                    <ul className="space-y-2">
+                      {tasks.map((task) => (
+                        <SortableTask key={task.id} task={task} showDragHandle />
+                      ))}
+                    </ul>
+                  </SortableContext>
+                </DndContext>
+              ) : (
+                <ul className="space-y-2">
+                  {filteredAndSortedTasks.map((task) => (
+                    <SortableTask key={task.id} task={task} showDragHandle={false} />
+                  ))}
+                </ul>
+              )
             )}
           </div>
 
@@ -2140,3 +2207,4 @@ export default function TodoApp() {
     </div>
   )
 }
+
